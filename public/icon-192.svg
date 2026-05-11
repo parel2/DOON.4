@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192">
+  <rect width="192" height="192" rx="40" fill="#0a0e17"/>
+  <rect x="56" y="72" width="80" height="56" rx="12" fill="#06b6d4" opacity="0.9"/>
+  <rect x="60" y="60" width="72" height="16" rx="8" fill="#14b8a6" opacity="0.9"/>
+  <circle cx="96" cy="100" r="8" fill="#0a0e17"/>
+  <text x="96" y="148" text-anchor="middle" font-family="system-ui,sans-serif" font-weight="800" font-size="24" fill="#ffffff">DOON</text>
+</svg>
