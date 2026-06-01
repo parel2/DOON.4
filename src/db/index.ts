@@ -8,12 +8,13 @@ export interface Balances {
 
 export interface Transaction {
   id?: number;
-  type: 'expense' | 'income' | 'transfer_fee';
+  type: 'expense' | 'income' | 'transfer_fee' | 'withdraw_direct' | 'withdraw_to_balance';
   category: string;
   description: string;
   amount: number;
   timestamp: number;
   source: 'offline' | 'online' | 'transfer';
+  withdrawFrom?: 'investasi' | 'darurat'; // untuk tracking withdraw dari jenis tabungan
 }
 
 export interface Savings {
@@ -21,6 +22,14 @@ export interface Savings {
   investasi: number;
   darurat: number;
   last_saved_timestamp: number;
+}
+
+export interface SavingsHistory {
+  id?: number;
+  type: 'investasi' | 'darurat';
+  amount: number;
+  date: string; // format: YYYY-MM-DD untuk grouping per hari
+  timestamp: number;
 }
 
 export interface Target {
@@ -34,6 +43,7 @@ class DoonDB extends Dexie {
   balances!: Table<Balances>;
   transactions!: Table<Transaction>;
   savings!: Table<Savings>;
+  savingsHistory!: Table<SavingsHistory>;
   targets!: Table<Target>;
 
   constructor() {
@@ -53,6 +63,13 @@ class DoonDB extends Dexie {
       return tx.table('transactions').toCollection().modify((t: Record<string, unknown>) => {
         if (!t.description) t.description = '';
       });
+    });
+    this.version(3).stores({
+      balances: '++id',
+      transactions: '++id, type, category, timestamp, source',
+      savings: '++id',
+      savingsHistory: '++id, type, date, timestamp',
+      targets: '++id',
     });
   }
 }
@@ -115,11 +132,29 @@ export async function deleteTarget(id: number): Promise<void> {
   await db.targets.delete(id);
 }
 
+// === Savings History Functions (untuk LIFO tracking) ===
+export async function addSavingsHistory(type: 'investasi' | 'darurat', amount: number): Promise<void> {
+  const now = Date.now();
+  const date = new Date(now).toLocaleDateString('id-ID', { year: 'numeric', month: '2-digit', day: '2-digit' }).split('/').reverse().join('-');
+  await db.savingsHistory.add({ type, amount, date, timestamp: now });
+}
+
+export async function getSavingsHistory(type: 'investasi' | 'darurat'): Promise<SavingsHistory[]> {
+  return await db.savingsHistory.where('type').equals(type).reverse().toArray();
+}
+
+// Untuk mendapatkan total savings per hari (untuk LIFO calculation)
+export async function getSavingsHistoryByDate(type: 'investasi' | 'darurat', targetDate?: string): Promise<SavingsHistory[]> {
+  const dateToQuery = targetDate || new Date().toLocaleDateString('id-ID', { year: 'numeric', month: '2-digit', day: '2-digit' }).split('/').reverse().join('-');
+  return await db.savingsHistory.where('type').equals(type).and(h => h.date === dateToQuery).toArray();
+}
+
 export async function exportDB(): Promise<string> {
   const data = {
     balances: await db.balances.toArray(),
     transactions: await db.transactions.toArray(),
     savings: await db.savings.toArray(),
+    savingsHistory: await db.savingsHistory.toArray(),
     targets: await db.targets.toArray(),
   };
   return btoa(JSON.stringify(data));
@@ -127,23 +162,26 @@ export async function exportDB(): Promise<string> {
 
 export async function importDB(encoded: string): Promise<void> {
   const data = JSON.parse(atob(encoded));
-  await db.transaction('rw', db.balances, db.transactions, db.savings, db.targets, async () => {
+  await db.transaction('rw', db.balances, db.transactions, db.savings, db.savingsHistory, db.targets, async () => {
     await db.balances.clear();
     await db.transactions.clear();
     await db.savings.clear();
+    await db.savingsHistory.clear();
     await db.targets.clear();
     if (data.balances?.length) await db.balances.bulkAdd(data.balances);
     if (data.transactions?.length) await db.transactions.bulkAdd(data.transactions);
     if (data.savings?.length) await db.savings.bulkAdd(data.savings);
+    if (data.savingsHistory?.length) await db.savingsHistory.bulkAdd(data.savingsHistory);
     if (data.targets?.length) await db.targets.bulkAdd(data.targets);
   });
 }
 
 export async function clearDB(): Promise<void> {
-  await db.transaction('rw', db.balances, db.transactions, db.savings, db.targets, async () => {
+  await db.transaction('rw', db.balances, db.transactions, db.savings, db.savingsHistory, db.targets, async () => {
     await db.balances.clear();
     await db.transactions.clear();
     await db.savings.clear();
+    await db.savingsHistory.clear();
     await db.targets.clear();
   });
 }
