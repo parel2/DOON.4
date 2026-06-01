@@ -61,6 +61,7 @@ export function getExpenseCategoryForWithdraw(type: 'investasi' | 'darurat'): st
 /**
  * Get affected transactions yang perlu di-adjust
  * Digunakan untuk menghitung burn rate & total pengeluaran yang benar
+ * Format date sebagai YYYY-MM-DD untuk matching dengan adjustments
  */
 export async function getAffectedTransactions(
   type: 'investasi' | 'darurat',
@@ -71,7 +72,13 @@ export async function getAffectedTransactions(
   const category = getExpenseCategoryForWithdraw(type);
 
   return allTransactions.filter((tx) => {
-    const txDate = formatDate(tx.timestamp).split(' ')[0]; // Get date part only
+    // Format date sebagai YYYY-MM-DD
+    const txDate = new Date(tx.timestamp).toLocaleDateString('id-ID', { 
+      year: 'numeric', 
+      month: '2-digit', 
+      day: '2-digit' 
+    }).split('/').reverse().join('-');
+    
     return affectedDates.includes(txDate) && 
            tx.category === category && 
            tx.type === 'expense';
@@ -79,14 +86,39 @@ export async function getAffectedTransactions(
 }
 
 /**
- * Calculate expense reduction amount untuk specific date
+ * Calculate total expense reduction untuk withdraw to balance
+ * Menghitung berapa total yang harus dikurangi dari analytics
  */
-export function calculateExpenseReductionForDate(
-  dateTransactions: Transaction[],
-  totalReduction: number
-) {
-  if (dateTransactions.length === 0) return 0;
+export async function calculateTotalExpenseReduction(
+  type: 'investasi' | 'darurat',
+  adjustments: Record<string, number>
+): Promise<number> {
+  const affectedTxs = await getAffectedTransactions(type, adjustments);
   
-  const totalAmount = dateTransactions.reduce((sum, tx) => sum + tx.amount, 0);
-  return Math.min(totalReduction, totalAmount);
+  // Jumlahkan semua savings transactions yang affected
+  return affectedTxs.reduce((sum, tx) => sum + tx.amount, 0);
+}
+
+/**
+ * Get all withdraw_to_balance transactions untuk audit/calculation
+ * Format date sebagai YYYY-MM-DD
+ */
+export async function getWithdrawToBalanceTransactions(): Promise<Array<{
+  date: string;
+  type: 'investasi' | 'darurat';
+  amount: number;
+}>> {
+  const allTransactions = await getTransactions();
+  
+  return allTransactions
+    .filter((tx) => tx.type === 'withdraw_to_balance')
+    .map((tx) => ({
+      date: new Date(tx.timestamp).toLocaleDateString('id-ID', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      }).split('/').reverse().join('-'),
+      type: (tx.withdrawFrom || 'investasi') as 'investasi' | 'darurat',
+      amount: tx.amount,
+    }));
 }
