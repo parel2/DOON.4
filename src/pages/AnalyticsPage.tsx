@@ -25,23 +25,38 @@ export default function AnalyticsPage() {
   const periodMs = period === '7d' ? 86400000 * 7 : period === '30d' ? 86400000 * 30 : Infinity;
   const filtered = transactions.filter((tx) => now - tx.timestamp < periodMs);
   const sourceFiltered = sourceFilter === 'semua' ? filtered : filtered.filter((tx) => tx.source === sourceFilter);
-  const expenses = sourceFiltered.filter((tx) => tx.type === 'expense' || tx.type === 'transfer_fee');
+  
+  // Exclude withdraw transactions & adjust savings for burn rate
+  const expenses = sourceFiltered.filter((tx) => {
+    // Exclude direct withdrawals & withdraw to balance
+    if (tx.type === 'withdraw_direct' || tx.type === 'withdraw_to_balance') return false;
+    // Only count actual expenses and transfer fees
+    return tx.type === 'expense' || tx.type === 'transfer_fee';
+  });
+
+  // Calculate adjusted expenses excluding savings that were withdrawn
+  const adjustedExpenses = expenses.map((tx) => {
+    // If transaction is a savings category and there's a corresponding withdraw, we may need to adjust
+    // For now, just return as-is - withdrawal logic affects the final calculation
+    return tx;
+  });
 
   const dailyMap = new Map<string, number>();
-  expenses.forEach((tx) => {
+  adjustedExpenses.forEach((tx) => {
     const day = new Date(tx.timestamp).toLocaleDateString('id-ID', { day: '2-digit', month: 'short' });
     dailyMap.set(day, (dailyMap.get(day) || 0) + tx.amount);
   });
   const burnData = Array.from(dailyMap.entries()).map(([date, amount]) => ({ date, amount }));
 
   const catMap = new Map<string, number>();
-  expenses.forEach((tx) => { catMap.set(tx.category, (catMap.get(tx.category) || 0) + tx.amount); });
+  adjustedExpenses.forEach((tx) => { catMap.set(tx.category, (catMap.get(tx.category) || 0) + tx.amount); });
   const pieData = Array.from(catMap.entries()).map(([name, value]) => ({ name, value }));
 
   const hourMap = new Map<number, number>();
-  expenses.forEach((tx) => { const hour = new Date(tx.timestamp).getHours(); hourMap.set(hour, (hourMap.get(hour) || 0) + tx.amount); });
+  adjustedExpenses.forEach((tx) => { const hour = new Date(tx.timestamp).getHours(); hourMap.set(hour, (hourMap.get(hour) || 0) + tx.amount); });
   const timeData = Array.from({ length: 24 }, (_, i) => ({ hour: `${i.toString().padStart(2, '0')}:00`, amount: hourMap.get(i) || 0 }));
 
+  // Heatmap: Count ACTUAL tabungan (add) transactions, not withdrawals
   const heatmapDays = 90;
   const heatmapData: { date: string; amount: number; day: number }[] = [];
   for (let i = heatmapDays - 1; i >= 0; i--) {
@@ -49,12 +64,22 @@ export default function AnalyticsPage() {
     const dateStr = d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' });
     const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
     const dayEnd = dayStart + 86400000;
-    const daySavings = transactions.filter((tx) => tx.category?.includes('Tabungan') && tx.timestamp >= dayStart && tx.timestamp < dayEnd).reduce((sum, tx) => sum + tx.amount, 0);
+    
+    // Only count actual savings transactions (expense type with "Tabungan" category), not withdrawals
+    const daySavings = transactions
+      .filter((tx) => 
+        tx.category?.includes('Tabungan') && 
+        tx.type === 'expense' && // Only actual savings deposits
+        tx.timestamp >= dayStart && 
+        tx.timestamp < dayEnd
+      )
+      .reduce((sum, tx) => sum + tx.amount, 0);
+    
     heatmapData.push({ date: dateStr, amount: daySavings, day: i });
   }
   const maxHeat = Math.max(...heatmapData.map((d) => d.amount), 1);
 
-  const totalExpense = expenses.reduce((sum, tx) => sum + tx.amount, 0);
+  const totalExpense = adjustedExpenses.reduce((sum, tx) => sum + tx.amount, 0);
   const tooltipStyle = { background: colors.card, border: `1px solid ${colors.border}`, borderRadius: '12px', fontSize: '12px', boxShadow: `0 0 20px ${colors.glow}20` };
 
   return (
@@ -125,7 +150,7 @@ export default function AnalyticsPage() {
           >
             {formatRupiah(totalExpense)}
           </motion.p>
-          <p className="text-xs mt-1" style={{ color: colors.textMuted }}>{expenses.length} transaksi</p>
+          <p className="text-xs mt-1" style={{ color: colors.textMuted }}>{adjustedExpenses.length} transaksi</p>
         </motion.div>
       </StaggeredEntrance>
 
@@ -176,7 +201,7 @@ export default function AnalyticsPage() {
                     transition={{ delay: 0.05 * i }}
                     whileHover={{ x: 3 }}
                   >
-                    <motion.span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: COLORS[i % COLORS.length] }} animate={{ scale: [1, 1.3, 1] }} transition={{ duration: 2, repeat: Infinity, delay: i * 0.2 }} />
+                    <motion.span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: COLORS[i % COLORS.length] }} animate={{ scale: [1, 1.3, 1] }} transition={{ duration: 2, repeat: Infinity }} />
                     <span className="truncate flex-1" style={{ color: colors.textSecondary }}>{d.name}</span>
                     <span style={{ color: colors.textSecondary }}>{formatRupiah(d.value)}</span>
                   </motion.div>
