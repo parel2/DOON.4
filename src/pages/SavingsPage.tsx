@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { PiggyBank, Target, Plus, Trash2, Bell, X } from 'lucide-react';
-import { getSavings, getTargets, updateSavings, addTarget, updateTarget, deleteTarget, addTransaction, getBalances, updateBalances, type Savings as SavingsType, type Target as TargetType } from '../db';
+import { PiggyBank, Target, Plus, Trash2, Bell, X, ArrowDown } from 'lucide-react';
+import { getSavings, getTargets, updateSavings, addTarget, updateTarget, deleteTarget, addTransaction, getBalances, updateBalances, addSavingsHistory, type Savings as SavingsType, type Target as TargetType } from '../db';
 import { useTheme } from '../components/ThemeEngine';
+import WithdrawModal from '../components/WithdrawModal';
 import JackpotTicker from '../components/JackpotTicker';
 import StaggeredEntrance from '../components/StaggeredEntrance';
 import LiquidBlob from '../components/LiquidBlob';
@@ -14,6 +15,7 @@ export default function SavingsPage() {
   const [targets, setTargets] = useState<TargetType[]>([]);
   const [showAddSavings, setShowAddSavings] = useState(false);
   const [showAddTarget, setShowAddTarget] = useState(false);
+  const [showWithdraw, setShowWithdraw] = useState<'investasi' | 'darurat' | null>(null);
   const [shakeBell, setShakeBell] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -47,9 +49,52 @@ export default function SavingsPage() {
     const newInvestasi = type === 'investasi' ? savings.investasi + amount : savings.investasi;
     const newDarurat = type === 'darurat' ? savings.darurat + amount : savings.darurat;
     await updateSavings(newInvestasi, newDarurat);
+    await addSavingsHistory(type, amount);
     await addTransaction({ type: 'expense', category: `Tabungan ${type === 'investasi' ? 'Investasi' : 'Darurat'}`, description: '', amount, timestamp: Date.now(), source });
     setShowAddSavings(false);
     setShakeBell(false);
+    refresh();
+  };
+
+  const handleWithdraw = async (amount: number, method: 'direct' | 'to_balance', type: 'investasi' | 'darurat') => {
+    if (!savings) return;
+    
+    const balances = await getBalances();
+    if (!balances) return;
+
+    // Update savings
+    const newInvestasi = type === 'investasi' ? savings.investasi - amount : savings.investasi;
+    const newDarurat = type === 'darurat' ? savings.darurat - amount : savings.darurat;
+    await updateSavings(newInvestasi, newDarurat);
+
+    if (method === 'direct') {
+      // Tarik langsung - just record as withdraw_direct
+      await addTransaction({
+        type: 'withdraw_direct',
+        category: `Tarik ${type === 'investasi' ? 'Investasi' : 'Darurat'}`,
+        description: `Tarik langsung dari tabungan ${type}`,
+        amount,
+        timestamp: Date.now(),
+        source: 'transfer',
+        withdrawFrom: type,
+      });
+    } else {
+      // Tambah ke saldo
+      const newOnline = balances.online + amount;
+      await updateBalances(balances.offline, newOnline);
+      
+      await addTransaction({
+        type: 'withdraw_to_balance',
+        category: `Tarik ${type === 'investasi' ? 'Investasi' : 'Darurat'}`,
+        description: `Tarik ke saldo dari tabungan ${type}`,
+        amount,
+        timestamp: Date.now(),
+        source: 'transfer',
+        withdrawFrom: type,
+      });
+    }
+
+    setShowWithdraw(null);
     refresh();
   };
 
@@ -113,38 +158,59 @@ export default function SavingsPage() {
       <StaggeredEntrance index={1} variant="scaleIn">
         <div className="grid grid-cols-2 gap-3 mb-6">
           <motion.div
-            className="relative rounded-3xl p-4 overflow-hidden border"
+            className="relative rounded-3xl p-4 overflow-hidden border cursor-pointer group"
             style={{ background: colors.card, borderColor: `${colors.offline}1a` }}
             whileHover={{ scale: 1.03, y: -3 }}
             whileTap={{ scale: 0.97 }}
             transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+            onClick={() => setShowWithdraw('investasi')}
           >
             <LiquidBlob />
             <div className="relative z-10">
-              <div className="flex items-center gap-2 mb-2">
-                <motion.div animate={{ rotate: [0, 360] }} transition={{ duration: 20, repeat: Infinity, ease: 'linear' }}>
-                  <PiggyBank size={14} style={{ color: colors.offline }} />
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <motion.div animate={{ rotate: [0, 360] }} transition={{ duration: 20, repeat: Infinity, ease: 'linear' }}>
+                    <PiggyBank size={14} style={{ color: colors.offline }} />
+                  </motion.div>
+                  <p className="text-[10px] uppercase tracking-wider" style={{ color: colors.textMuted }}>Investasi</p>
+                </div>
+                <motion.div
+                  className="opacity-0 group-hover:opacity-100 transition-opacity"
+                  animate={{ y: [0, -2, 0] }}
+                  transition={{ duration: 2, repeat: Infinity }}
+                >
+                  <ArrowDown size={12} style={{ color: colors.offline }} />
                 </motion.div>
-                <p className="text-[10px] uppercase tracking-wider" style={{ color: colors.textMuted }}>Investasi</p>
               </div>
               <JackpotTicker value={savings?.investasi || 0} className="text-lg font-bold" style={{ color: colors.offline }} />
               <p className="text-[10px] mt-1" style={{ color: colors.textMuted }}>Min. Rp 10.000</p>
             </div>
           </motion.div>
+
           <motion.div
-            className="relative rounded-3xl p-4 overflow-hidden border"
+            className="relative rounded-3xl p-4 overflow-hidden border cursor-pointer group"
             style={{ background: colors.card, borderColor: `${colors.accentSecondary}1a` }}
             whileHover={{ scale: 1.03, y: -3 }}
             whileTap={{ scale: 0.97 }}
             transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+            onClick={() => setShowWithdraw('darurat')}
           >
             <LiquidBlob />
             <div className="relative z-10">
-              <div className="flex items-center gap-2 mb-2">
-                <motion.div animate={{ scale: [1, 1.2, 1] }} transition={{ duration: 2, repeat: Infinity }}>
-                  <PiggyBank size={14} style={{ color: colors.accentSecondary }} />
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <motion.div animate={{ scale: [1, 1.2, 1] }} transition={{ duration: 2, repeat: Infinity }}>
+                    <PiggyBank size={14} style={{ color: colors.accentSecondary }} />
+                  </motion.div>
+                  <p className="text-[10px] uppercase tracking-wider" style={{ color: colors.textMuted }}>Darurat</p>
+                </div>
+                <motion.div
+                  className="opacity-0 group-hover:opacity-100 transition-opacity"
+                  animate={{ y: [0, -2, 0] }}
+                  transition={{ duration: 2, repeat: Infinity }}
+                >
+                  <ArrowDown size={12} style={{ color: colors.accentSecondary }} />
                 </motion.div>
-                <p className="text-[10px] uppercase tracking-wider" style={{ color: colors.textMuted }}>Darurat</p>
               </div>
               <JackpotTicker value={savings?.darurat || 0} className="text-lg font-bold" style={{ color: colors.accentSecondary }} />
               <p className="text-[10px] mt-1" style={{ color: colors.textMuted }}>Min. Rp 5.000</p>
@@ -218,6 +284,14 @@ export default function SavingsPage() {
       <AnimatePresence>
         {showAddSavings && <AddSavingsModal onAdd={handleAddSavings} onClose={() => setShowAddSavings(false)} />}
         {showAddTarget && <AddTargetModal onAdd={async (name, amount) => { await addTarget({ name, target_amount: amount, current_amount: 0 }); setShowAddTarget(false); refresh(); }} onClose={() => setShowAddTarget(false)} />}
+        {showWithdraw && savings && (
+          <WithdrawModal
+            savingsAmount={showWithdraw === 'investasi' ? savings.investasi : savings.darurat}
+            savingsType={showWithdraw}
+            onWithdraw={(amount, method) => handleWithdraw(amount, method, showWithdraw)}
+            onClose={() => setShowWithdraw(null)}
+          />
+        )}
       </AnimatePresence>
     </div>
   );
