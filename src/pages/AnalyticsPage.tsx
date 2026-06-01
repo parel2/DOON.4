@@ -5,6 +5,7 @@ import { getTransactions, type Transaction } from '../db';
 import { useTheme } from '../components/ThemeEngine';
 import StaggeredEntrance from '../components/StaggeredEntrance';
 import { formatRupiah } from '../utils/format';
+import { getWithdrawToBalanceTransactions } from '../utils/withdraw';
 
 const COLORS = ['#06b6d4', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#84cc16'];
 
@@ -13,10 +14,24 @@ export default function AnalyticsPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [period, setPeriod] = useState<'7d' | '30d' | 'all'>('30d');
   const [sourceFilter, setSourceFilter] = useState<'semua' | 'online' | 'offline'>('semua');
+  const [withdrawToBalanceMap, setWithdrawToBalanceMap] = useState<Record<string, { investasi: number; darurat: number }>>({});
 
   const refresh = useCallback(async () => {
     const txs = await getTransactions();
     setTransactions(txs.sort((a, b) => a.timestamp - b.timestamp));
+    
+    // Get all withdraw to balance transactions untuk calculate reductions
+    const withdrawals = await getWithdrawToBalanceTransactions();
+    const withdrawMap: Record<string, { investasi: number; darurat: number }> = {};
+    
+    withdrawals.forEach((w) => {
+      if (!withdrawMap[w.date]) {
+        withdrawMap[w.date] = { investasi: 0, darurat: 0 };
+      }
+      withdrawMap[w.date][w.type] += w.amount;
+    });
+    
+    setWithdrawToBalanceMap(withdrawMap);
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
@@ -26,20 +41,39 @@ export default function AnalyticsPage() {
   const filtered = transactions.filter((tx) => now - tx.timestamp < periodMs);
   const sourceFiltered = sourceFilter === 'semua' ? filtered : filtered.filter((tx) => tx.source === sourceFilter);
   
-  // Exclude withdraw transactions & adjust savings for burn rate
+  // Exclude withdraw transactions
   const expenses = sourceFiltered.filter((tx) => {
-    // Exclude direct withdrawals & withdraw to balance
     if (tx.type === 'withdraw_direct' || tx.type === 'withdraw_to_balance') return false;
-    // Only count actual expenses and transfer fees
     return tx.type === 'expense' || tx.type === 'transfer_fee';
   });
 
-  // Calculate adjusted expenses excluding savings that were withdrawn
+  // Apply withdraw-to-balance reductions
   const adjustedExpenses = expenses.map((tx) => {
-    // If transaction is a savings category and there's a corresponding withdraw, we may need to adjust
-    // For now, just return as-is - withdrawal logic affects the final calculation
+    const txDate = new Date(tx.timestamp).toLocaleDateString('id-ID', { 
+      year: 'numeric', 
+      month: '2-digit', 
+      day: '2-digit' 
+    }).split('/').reverse().join('-');
+    
+    const withdrawData = withdrawToBalanceMap[txDate];
+    if (!withdrawData) return tx;
+    
+    // If this is a savings transaction, check if it should be reduced
+    const isInvestasi = tx.category === 'Tabungan Investasi';
+    const isDarurat = tx.category === 'Tabungan Darurat';
+    
+    if (isInvestasi && withdrawData.investasi > 0) {
+      const reduction = Math.min(tx.amount, withdrawData.investasi);
+      return { ...tx, amount: tx.amount - reduction };
+    }
+    
+    if (isDarurat && withdrawData.darurat > 0) {
+      const reduction = Math.min(tx.amount, withdrawData.darurat);
+      return { ...tx, amount: tx.amount - reduction };
+    }
+    
     return tx;
-  });
+  }).filter((tx) => tx.amount > 0); // Filter out transactions dengan amount 0 setelah reduction
 
   const dailyMap = new Map<string, number>();
   adjustedExpenses.forEach((tx) => {
@@ -56,7 +90,7 @@ export default function AnalyticsPage() {
   adjustedExpenses.forEach((tx) => { const hour = new Date(tx.timestamp).getHours(); hourMap.set(hour, (hourMap.get(hour) || 0) + tx.amount); });
   const timeData = Array.from({ length: 24 }, (_, i) => ({ hour: `${i.toString().padStart(2, '0')}:00`, amount: hourMap.get(i) || 0 }));
 
-  // Heatmap: Count ACTUAL tabungan (add) transactions, not withdrawals
+  // Heatmap: Count actual savings deposits, accounting for withdrawals
   const heatmapDays = 90;
   const heatmapData: { date: string; amount: number; day: number }[] = [];
   for (let i = heatmapDays - 1; i >= 0; i--) {
@@ -64,16 +98,28 @@ export default function AnalyticsPage() {
     const dateStr = d.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' });
     const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
     const dayEnd = dayStart + 86400000;
+    const txDate = new Date(d).toLocaleDateString('id-ID', { 
+      year: 'numeric', 
+      month: '2-digit', 
+      day: '2-digit' 
+    }).split('/').reverse().join('-');
     
-    // Only count actual savings transactions (expense type with "Tabungan" category), not withdrawals
-    const daySavings = transactions
+    // Count actual savings transactions
+    let daySavings = transactions
       .filter((tx) => 
         tx.category?.includes('Tabungan') && 
-        tx.type === 'expense' && // Only actual savings deposits
+        tx.type === 'expense' &&
         tx.timestamp >= dayStart && 
         tx.timestamp < dayEnd
       )
       .reduce((sum, tx) => sum + tx.amount, 0);
+    
+    // Subtract withdraw-to-balance for that day
+    const withdrawData = withdrawToBalanceMap[txDate];
+    if (withdrawData) {
+      const withdrawAmount = (withdrawData.investasi || 0) + (withdrawData.darurat || 0);
+      daySavings = Math.max(0, daySavings - withdrawAmount);
+    }
     
     heatmapData.push({ date: dateStr, amount: daySavings, day: i });
   }
